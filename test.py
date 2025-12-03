@@ -28,17 +28,20 @@ def process_stock_revenue(input_file='target.xlsx', output_file=None):
     # api.login(user_id='user_id', password='password')
 
     df = pd.read_excel(input_file)
-    last_month = datetime.now().month - 1
+    
+    current_month = datetime.now().month
+    last_month = current_month - 1 if current_month > 1 else 12
+    previous_month = last_month - 1 if last_month > 1 else 12
     
     for stock_id in df["代號"]:
         revenue_data = get_stock_revenue_data(api, stock_id)
         
         revenue_current = extract_revenue_by_month(revenue_data, last_month)
-        revenue_previous = extract_revenue_by_month(revenue_data, last_month - 1)
+        revenue_previous = extract_revenue_by_month(revenue_data, previous_month)
         
         print(stock_id, last_month, revenue_current, revenue_previous)
         df.loc[df["代號"] == stock_id, f'{last_month}月營收'] = revenue_current
-        df.loc[df["代號"] == stock_id, f'{last_month - 1}月營收'] = revenue_previous
+        df.loc[df["代號"] == stock_id, f'{previous_month}月營收'] = revenue_previous
     
     print(df)
     
