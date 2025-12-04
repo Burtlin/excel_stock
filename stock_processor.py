@@ -161,11 +161,6 @@ def get_last_two_season_data(financial_data, data_type):
     return value_last, quarter_last, value_prev, quarter_prev
 
 
-def get_last_two_season_eps(financial_data, stock_id):
-    """取得股票上一季和上上季的 EPS"""
-    return get_last_two_season_data(financial_data, 'EPS')
-
-
 def calculate_gross_margin(financial_data):
     """計算所有季度的毛利率"""
     # 提取毛利和營收數據
@@ -179,6 +174,24 @@ def calculate_gross_margin(financial_data):
     merged_data['gross_margin'] = (merged_data['gross_profit'] / merged_data['revenue'] * 100).round(2)
     
     return merged_data
+
+
+def get_ytd_revenue(financial_data):
+    """計算今年累積營收（Year-To-Date Revenue）"""
+    current_year = datetime.now().year
+    
+    # 篩選今年的 Revenue 數據
+    revenue_data = financial_data[
+        (financial_data['type'] == 'Revenue') &
+        (financial_data['date'].str.startswith(str(current_year)))
+    ]
+    
+    if revenue_data.empty:
+        return None
+    
+    # 加總今年所有季度的營收
+    ytd_revenue = revenue_data['value'].sum()
+    return ytd_revenue
 
 
 def get_last_two_season_gross_margin(financial_data):
@@ -285,10 +298,18 @@ def process_financial_data(api, df, idx, stock_id):
     df.at[idx, f'{gm_quarter_last}毛利率(%)'] = gross_margin_last
     df.at[idx, f'{gm_quarter_prev}毛利率(%)'] = gross_margin_prev
     
+    # 處理今年累積營收
+    ytd_revenue = get_ytd_revenue(financial_data)
+    ytd_revenue_million = convert_to_million(ytd_revenue)
+    
+    # 初始化並更新累積營收欄位
+    current_year = datetime.now().year
+    ensure_column_exists(df, f'{str(current_year)[-2:]}年累積營收(M)')
+    df.at[idx, f'{str(current_year)[-2:]}年累積營收(M)'] = ytd_revenue_million
     
     # 處理 EPS
     try:
-        eps_last, quarter_last, eps_prev, quarter_prev = get_last_two_season_eps(financial_data, stock_id)
+        eps_last, quarter_last, eps_prev, quarter_prev = get_last_two_season_data(financial_data, 'EPS')
     except Exception as e:
         print(f"  錯誤: {stock_id} EPS 提取失敗 - {str(e)}")
         eps_last = quarter_last = eps_prev = quarter_prev = None
@@ -300,7 +321,7 @@ def process_financial_data(api, df, idx, stock_id):
     df.at[idx, f'{quarter_prev}EPS'] = eps_prev
 
 
-def process_stock(input_file='target.xlsx', output_file=None, sheet_name=0):
+def process_stock(input_file='target.xlsx', output_file=None, sheet_name='Sheet1'):
     """處理股票數據，只更新計算出的欄位，保留原檔案其他內容"""
     api = DataLoader()
     # api.login_by_token(api_token='token')
@@ -366,5 +387,4 @@ def process_stock(input_file='target.xlsx', output_file=None, sheet_name=0):
 
 if __name__ == '__main__':
     process_stock(sheet_name='Sheet1')
-    # process_stock(output_file='output.xlsx')  # 若要輸出到不同檔案
 
