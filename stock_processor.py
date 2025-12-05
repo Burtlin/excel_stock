@@ -1,8 +1,39 @@
 from datetime import datetime
-
+import json
+import os
 import pandas as pd
 from openpyxl import load_workbook
 from FinMind.data import DataLoader
+###########################################################################
+# 名稱 相關功能
+###########################################################################
+def get_stock_name_mapping(api):
+    """獲取股票代號與名稱的對應字典"""
+    if os.path.exists('data/stock_info.json'):
+        with open('data/stock_info.json', 'r', encoding='utf-8') as f:
+            stock_dict = json.load(f)
+        return stock_dict
+    
+    df = api.taiwan_stock_info()
+    stock_dict = dict(zip(df['stock_id'], df['stock_name']))
+    # save to json
+    os.makedirs('data', exist_ok=True)
+    with open('data/stock_info.json', 'w', encoding='utf-8') as f:
+        json.dump(stock_dict, f, ensure_ascii=False, indent=4)
+    return stock_dict
+
+
+def add_stock_names(df, stock_dict):
+    """根據股票代號加入名稱欄位"""
+    df['名稱'] = df['代號'].astype(str).map(stock_dict)
+    return df
+
+
+def process_info_data(api, df):
+    """處理股票資訊數據，加入名稱欄位"""
+    stock_dict = get_stock_name_mapping(api)
+    df = add_stock_names(df, stock_dict)
+    return df    
 
 ###########################################################################
 # 營收 相關功能
@@ -329,6 +360,11 @@ def process_stock(input_file='target.xlsx', output_file=None, sheet_name='Sheet1
 
     # 讀取指定的 sheet
     df = pd.read_excel(input_file, sheet_name=sheet_name)
+    # df只取得代號成新的df
+    df = df[['代號']]
+    
+    # 加入名稱欄位
+    df = process_info_data(api, df)
     
     # 使用輔助函數計算時間
     (last_month_year, last_month), (previous_month_year, previous_month) = get_previous_two_months()
