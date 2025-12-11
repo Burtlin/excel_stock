@@ -94,6 +94,54 @@ def convert_to_million(value):
     """將數值從元轉換為百萬單位（取整）"""
     return round(value / 1000000) if value else None
 
+
+def get_ytd_revenue_from_monthly(revenue_data):
+    """從月營收數據計算今年累積營收"""
+    current_year = datetime.now().year
+    ytd_revenue_data = revenue_data[revenue_data['revenue_year'] == current_year]
+    
+    if ytd_revenue_data.empty:
+        return None
+    
+    return ytd_revenue_data['revenue'].sum()
+
+
+def get_ytd_revenue_yoy(revenue_data):
+    """計算今年累積營收YoY，根據實際有資料的月份進行比較"""
+    current_year = datetime.now().year
+    last_year = current_year - 1
+    
+    # 取得今年的營收數據
+    current_year_data = revenue_data[revenue_data['revenue_year'] == current_year]
+    
+    if current_year_data.empty:
+        return None, None
+    
+    # 找出今年最新有資料的月份
+    latest_month = current_year_data['revenue_month'].max()
+    
+    # 計算今年截至最新月份的累積營收
+    current_ytd_data = current_year_data[current_year_data['revenue_month'] <= latest_month]
+    current_ytd = current_ytd_data['revenue'].sum()
+    
+    # 計算去年同期（相同月份）的累積營收
+    last_year_data = revenue_data[
+        (revenue_data['revenue_year'] == last_year) &
+        (revenue_data['revenue_month'] <= latest_month)
+    ]
+    
+    if last_year_data.empty:
+        return None, latest_month
+    
+    last_year_ytd = last_year_data['revenue'].sum()
+    
+    # 計算YoY
+    if last_year_ytd and last_year_ytd != 0:
+        yoy = round((current_ytd - last_year_ytd) / last_year_ytd * 100, 2)
+        return yoy, latest_month
+    
+    return None, latest_month
+
 ##############################################################################
 # EPS 相關功能
 ##############################################################################
@@ -192,6 +240,31 @@ def get_last_two_season_data(financial_data, data_type):
     return value_last, quarter_last, value_prev, quarter_prev
 
 
+def get_last_three_season_data(financial_data, data_type):
+    """通用函數：取得上一季、上上季和上上上季的指定數據"""
+    # 計算上一季、上上季和上上上季的年份月份
+    target_year, last_season_month = get_last_season_month()
+    prev_year, prev_month = get_previous_season_month(target_year, last_season_month)
+    prev2_year, prev2_month = get_previous_season_month(prev_year, prev_month)
+    
+    # 組合目標日期
+    last_date = get_season_date(target_year, last_season_month)
+    prev_date = get_season_date(prev_year, prev_month)
+    prev2_date = get_season_date(prev2_year, prev2_month)
+    
+    # 提取三季的數據
+    value_last = extract_value_by_date(financial_data, data_type, last_date)
+    value_prev = extract_value_by_date(financial_data, data_type, prev_date)
+    value_prev2 = extract_value_by_date(financial_data, data_type, prev2_date)
+    
+    # 取得季度名稱
+    quarter_last = get_quarter_name(target_year, last_season_month)
+    quarter_prev = get_quarter_name(prev_year, prev_month)
+    quarter_prev2 = get_quarter_name(prev2_year, prev2_month)
+    
+    return value_last, quarter_last, value_prev, quarter_prev, value_prev2, quarter_prev2
+
+
 def calculate_gross_margin(financial_data):
     """計算所有季度的毛利率"""
     # 提取毛利和營收數據
@@ -251,6 +324,24 @@ def get_last_two_season_gross_margin(financial_data):
     
     return gross_margin_last, quarter_last, gross_margin_prev, quarter_prev
 
+
+def get_ytd_eps(financial_data):
+    """計算今年累積EPS（Year-To-Date EPS）"""
+    current_year = datetime.now().year
+    
+    # 篩選今年的 EPS 數據
+    eps_data = financial_data[
+        (financial_data['type'] == 'EPS') &
+        (financial_data['date'].str.startswith(str(current_year)))
+    ]
+    
+    if eps_data.empty:
+        return None
+    
+    # 加總今年所有季度的 EPS
+    ytd_eps = eps_data['value'].sum()
+    return round(ytd_eps, 2) if ytd_eps else None
+
 ############################################################################
 # 主程序
 ############################################################################
@@ -286,11 +377,21 @@ def process_revenue_data(api, df, idx, stock_id, last_month_year, last_month, pr
     else:
         yoy = None
     
+    # 計算今年累積營收
+    ytd_revenue = get_ytd_revenue_from_monthly(revenue_data)
+    ytd_revenue_million = convert_to_million(ytd_revenue)
+    
+    # 計算累積營收YoY
+    ytd_yoy, ytd_month = get_ytd_revenue_yoy(revenue_data)
+    
     # 更新 DataFrame
+    current_year = datetime.now().year
     df.at[idx, f'{last_month}月營收(M)'] = revenue_current_million
     df.at[idx, f'{previous_month}月營收(M)'] = revenue_previous_million
     df.at[idx, 'MoM(%)'] = mom
     df.at[idx, 'YoY(%)'] = yoy
+    df.at[idx, f'{str(current_year)[-2:]}年累積營收(M)'] = ytd_revenue_million
+    df.at[idx, '累積營收YoY(%)'] = ytd_yoy
 
 
 def ensure_column_exists(df, column_name):
@@ -300,7 +401,7 @@ def ensure_column_exists(df, column_name):
 
 
 def process_financial_data(api, df, idx, stock_id):
-    """處理單一股票的綜合損益表（季營收、毛利率、EPS等）"""
+    """處理單一股票的綜合損益表（季營收、毛利率、累積營收）"""
     
     financial_data = get_stock_financial_data(api, stock_id)
     if financial_data is None or financial_data.empty:
@@ -337,34 +438,61 @@ def process_financial_data(api, df, idx, stock_id):
     current_year = datetime.now().year
     ensure_column_exists(df, f'{str(current_year)[-2:]}年累積營收(M)')
     df.at[idx, f'{str(current_year)[-2:]}年累積營收(M)'] = ytd_revenue_million
+
+
+def process_eps_data(api, df, idx, stock_id):
+    """處理單一股票的 EPS 數據"""
     
-    # 處理 EPS
+    financial_data = get_stock_financial_data(api, stock_id)
+    if financial_data is None or financial_data.empty:
+        print(f"  警告: {stock_id} 無財務數據")
+        return
+    
+    # 處理 EPS（取得三季數據）
     try:
-        eps_last, quarter_last, eps_prev, quarter_prev = get_last_two_season_data(financial_data, 'EPS')
+        eps_last, quarter_last, eps_prev, quarter_prev, eps_prev2, quarter_prev2 = get_last_three_season_data(financial_data, 'EPS')
     except Exception as e:
         print(f"  錯誤: {stock_id} EPS 提取失敗 - {str(e)}")
-        eps_last = quarter_last = eps_prev = quarter_prev = None
+        eps_last = quarter_last = eps_prev = quarter_prev = eps_prev2 = quarter_prev2 = None
+    
+    # 計算今年累積 EPS
+    try:
+        ytd_eps = get_ytd_eps(financial_data)
+    except Exception as e:
+        print(f"  錯誤: {stock_id} YTD EPS 計算失敗 - {str(e)}")
+        ytd_eps = None
     
     # 初始化並更新 EPS 欄位
     ensure_column_exists(df, f'{quarter_last}EPS')
     ensure_column_exists(df, f'{quarter_prev}EPS')
+    ensure_column_exists(df, f'{quarter_prev2}EPS')
+    current_year = datetime.now().year
+    ensure_column_exists(df, f'{str(current_year)[-2:]}年累積EPS')
     df.at[idx, f'{quarter_last}EPS'] = eps_last
     df.at[idx, f'{quarter_prev}EPS'] = eps_prev
+    df.at[idx, f'{quarter_prev2}EPS'] = eps_prev2
+    df.at[idx, f'{str(current_year)[-2:]}年累積EPS'] = ytd_eps
 
 
-def process_stock(input_file='target.xlsx', output_file=None, sheet_name='Sheet1'):
-    """處理股票數據，只更新計算出的欄位，保留原檔案其他內容"""
+def process_stock(input_file='target.xlsx', output_file=None, revenue_sheet='月營收', financial_sheet='綜合損益表', eps_sheet='EPS'):
+    """處理股票數據，營收、財務和 EPS 數據分別輸出到不同的 sheet"""
     api = DataLoader()
     # api.login_by_token(api_token='token')
     # api.login(user_id='user_id', password='password')
 
-    # 讀取指定的 sheet
-    df = pd.read_excel(input_file, sheet_name=sheet_name)
-    # df只取得代號成新的df
-    df = df[['代號']]
+    # 讀取第一個 sheet 取得股票代號
+    df_base = pd.read_excel(input_file, sheet_name=0)
+    df_base = df_base[['代號']].astype(int)
+    
+    # 創建三個 DataFrame：營收、綜合損益表、EPS
+    df_revenue = df_base.copy()
+    df_financial = df_base.copy()
+    df_eps = df_base.copy()
     
     # 加入名稱欄位
-    df = process_info_data(api, df)
+    df_revenue = process_info_data(api, df_revenue)
+    df_financial = process_info_data(api, df_financial)
+    df_eps = process_info_data(api, df_eps)
     
     # 使用輔助函數計算時間
     (last_month_year, last_month), (previous_month_year, previous_month) = get_previous_two_months()
@@ -372,28 +500,39 @@ def process_stock(input_file='target.xlsx', output_file=None, sheet_name='Sheet1
     # 計算去年同期
     yoy_year = last_month_year - 1
     
-    # 初始化新欄位
-    df[f'{last_month}月營收(M)'] = None
-    df[f'{previous_month}月營收(M)'] = None
-    df['MoM(%)'] = None
-    df['YoY(%)'] = None
+    # 初始化營收相關欄位
+    current_year = datetime.now().year
+    df_revenue[f'{last_month}月營收(M)'] = None
+    df_revenue[f'{previous_month}月營收(M)'] = None
+    df_revenue['MoM(%)'] = None
+    df_revenue['YoY(%)'] = None
+    df_revenue[f'{str(current_year)[-2:]}年累積營收(M)'] = None
+    df_revenue['累積營收YoY(%)'] = None
     
-    total = len(df)
-    for idx, row in df.iterrows():
+    total = len(df_base)
+    for idx, row in df_base.iterrows():
         stock_id = row["代號"]
         print(f"[{idx+1}/{total}] 處理中: {stock_id}")
         
-        # 處理營收數據
-        process_revenue_data(api, df, idx, stock_id, last_month_year, last_month, previous_month_year, previous_month, yoy_year)
+        # 處理營收數據（寫入 df_revenue）
+        process_revenue_data(api, df_revenue, idx, stock_id, last_month_year, last_month, previous_month_year, previous_month, yoy_year)
         
-        # 取得並處理綜合損益表
+        # 處理綜合損益表數據（寫入 df_financial）
         try:
-            process_financial_data(api, df, idx, stock_id)
+            process_financial_data(api, df_financial, idx, stock_id)
         except Exception as e:
             print(f"  錯誤: {stock_id} 財務數據處理失敗 - {str(e)}")
+        
+        # 處理 EPS 數據（寫入 df_eps）
+        try:
+            process_eps_data(api, df_eps, idx, stock_id)
+        except Exception as e:
+            print(f"  錯誤: {stock_id} EPS 數據處理失敗 - {str(e)}")
     
     print("\n處理完成！")
-    print(df)
+    print(f"\n營收數據:\n{df_revenue}")
+    print(f"\n綜合損益表數據:\n{df_financial}")
+    print(f"\nEPS數據:\n{df_eps}")
     
     # 決定輸出檔案
     if output_file is None:
@@ -404,23 +543,22 @@ def process_stock(input_file='target.xlsx', output_file=None, sheet_name='Sheet1
         # 載入原始工作簿
         book = load_workbook(input_file)
         
-        # 取得目標 sheet 名稱
-        if isinstance(sheet_name, int):
-            target_sheet_name = book.sheetnames[sheet_name]
-        else:
-            target_sheet_name = sheet_name
-        
-        # 使用 ExcelWriter 將更新的 DataFrame 寫入，同時保留其他 sheet
-        with pd.ExcelWriter(output_file, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
-            df.to_excel(writer, sheet_name=target_sheet_name, index=False)
+        # 使用 ExcelWriter 將三個 DataFrame 分別寫入不同 sheet
+        with pd.ExcelWriter(output_file, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
+            df_revenue.to_excel(writer, sheet_name=revenue_sheet, index=False)
+            df_financial.to_excel(writer, sheet_name=financial_sheet, index=False)
+            df_eps.to_excel(writer, sheet_name=eps_sheet, index=False)
         
         print(f"\n已更新並儲存至: {output_file}")
+        print(f"  - 營收數據: {revenue_sheet}")
+        print(f"  - 綜合損益表: {financial_sheet}")
+        print(f"  - EPS數據: {eps_sheet}")
     except Exception as e:
         print(f"\n儲存檔案時發生錯誤: {str(e)}")
     
-    return df
+    return df_revenue, df_financial, df_eps
 
 
 if __name__ == '__main__':
-    process_stock(sheet_name='Sheet1')
+    process_stock()
 
