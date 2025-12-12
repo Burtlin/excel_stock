@@ -10,13 +10,6 @@ a = Analysis(
         ('data/stock_info.json', 'data'),  # 如果需要包含資料檔案
     ],
     hiddenimports=[
-        'pandas',
-        'openpyxl',
-        'FinMind',
-        'FinMind.data',
-        'numpy',
-        'pytz',
-        'dateutil',
     ],
     hookspath=[],
     hooksconfig={},

@@ -563,5 +563,5 @@ def process_stock(input_file='target.xlsx', output_file=None, revenue_sheet='月
 if __name__ == '__main__':
     args = sys.argv[1:]
     input_file = args[0] if len(args) > 0 else 'target.xlsx'
-    output_file = args[1] if len(args) > 1 else None
+    output_file = args[1] if len(args) > 1 else 'target.xlsx'
     process_stock(input_file=input_file, output_file=output_file)
