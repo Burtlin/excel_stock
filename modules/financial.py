@@ -257,10 +257,36 @@ def process_financial_data(api, df, idx, stock_id):
 
 
 def process_eps_data(api, df, idx, stock_id):
-    """處理單一股票的 EPS 數據"""
-    from datetime import datetime
+    """處理單一股票的 EPS 數據（包含最新收盤價）"""
+    from datetime import datetime, timedelta
     from modules.utils import ensure_column_exists
     
+    # 獲取最新收盤價
+    try:
+        # 計算查詢起始日期（最近 30 天）
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=10)
+        
+        daily_data = api.taiwan_stock_daily(
+            stock_id=stock_id,
+            start_date=start_date.strftime('%Y-%m-%d')
+        )
+        
+        if daily_data is not None and not daily_data.empty:
+            # 取得最新一筆資料
+            latest_data = daily_data.sort_values(by="date", ascending=False).head(1)
+            latest_date = latest_data.iloc[0]["date"]
+            latest_close = latest_data.iloc[0]["close"]
+            
+            # 初始化並更新收盤價欄位（欄位名稱為日期）
+            ensure_column_exists(df, latest_date)
+            df.at[idx, latest_date] = latest_close
+        else:
+            logging.warning(f"  警告: {stock_id} 無法取得收盤價")
+    except Exception as e:
+        logging.error(f"  錯誤: {stock_id} 收盤價取得失敗 - {str(e)}")
+    
+    # 獲取財務數據
     financial_data = get_stock_financial_data(api, stock_id)
     if financial_data is None or financial_data.empty:
         logging.warning(f"  警告: {stock_id} 無財務數據")
