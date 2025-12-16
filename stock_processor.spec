@@ -7,9 +7,15 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[
-        ('data/stock_info.json', 'data'),  # 如果需要包含資料檔案
+        ('config.py', '.'),  # 配置檔案
+        ('modules', 'modules'),  # 模組目錄
     ],
     hiddenimports=[
+        'modules.logger',
+        'modules.cache',
+        'modules.revenue',
+        'modules.financial',
+        'modules.utils',
     ],
     hookspath=[],
     hooksconfig={},
