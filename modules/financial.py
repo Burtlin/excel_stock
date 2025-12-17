@@ -215,7 +215,7 @@ def get_ytd_eps(financial_data):
 
 
 def process_financial_data(api, df, idx, stock_id):
-    """處理單一股票的綜合損益表（季營收、毛利率、累積營收）"""
+    """處理單一股票的綜合損益表（季營收、毛利率、累積營收、去年整年數據）"""
     from datetime import datetime
     from modules.utils import convert_to_million, ensure_column_exists
     
@@ -254,6 +254,34 @@ def process_financial_data(api, df, idx, stock_id):
     current_year = datetime.now().year
     ensure_column_exists(df, f'{str(current_year)[-2:]}年累積營收(M)')
     df.at[idx, f'{str(current_year)[-2:]}年累積營收(M)'] = ytd_revenue_million
+    
+    # 處理去年整年營收
+    last_year = current_year - 1
+    last_year_revenue_data = financial_data[
+        (financial_data['type'] == 'Revenue') &
+        (financial_data['date'].str.startswith(str(last_year)))
+    ]
+    
+    if not last_year_revenue_data.empty:
+        last_year_total_revenue = last_year_revenue_data['value'].sum()
+        last_year_revenue_million = convert_to_million(last_year_total_revenue)
+        ensure_column_exists(df, f'{str(last_year)[-2:]}年整年營收(M)')
+        df.at[idx, f'{str(last_year)[-2:]}年整年營收(M)'] = last_year_revenue_million
+    
+    # 處理去年整年毛利率（計算加權平均）
+    last_year_gross_profit_data = financial_data[
+        (financial_data['type'] == 'GrossProfit') &
+        (financial_data['date'].str.startswith(str(last_year)))
+    ]
+    
+    if not last_year_revenue_data.empty and not last_year_gross_profit_data.empty:
+        last_year_total_gross_profit = last_year_gross_profit_data['value'].sum()
+        last_year_total_revenue_value = last_year_revenue_data['value'].sum()
+        
+        if last_year_total_revenue_value and last_year_total_revenue_value != 0:
+            last_year_gross_margin = round((last_year_total_gross_profit / last_year_total_revenue_value) * 100, 2)
+            ensure_column_exists(df, f'{str(last_year)[-2:]}年整年毛利率(%)')
+            df.at[idx, f'{str(last_year)[-2:]}年整年毛利率(%)'] = last_year_gross_margin
 
 
 def process_eps_data(api, df, idx, stock_id):
