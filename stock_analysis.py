@@ -73,7 +73,7 @@ def get_monthly_revenue_by_years(api, stock_id, years=3, use_cache=True):
             else:
                 row[f'{year}年'] = None
         
-        # 計算 MoM（Month-over-Month）- 與上個月比較
+        # 計算今年 MoM（Month-over-Month）- 與上個月比較
         current_revenue = get_revenue(current_year, month)
         prev_month = month - 1 if month > 1 else 12
         prev_year = current_year if month > 1 else current_year - 1
@@ -81,23 +81,44 @@ def get_monthly_revenue_by_years(api, stock_id, years=3, use_cache=True):
         
         if current_revenue and prev_revenue and prev_revenue != 0:
             mom = round((current_revenue - prev_revenue) / prev_revenue * 100, 2)
-            row['MoM(%)'] = mom
+            row['今年MoM(%)'] = mom
         else:
-            row['MoM(%)'] = None
+            row['今年MoM(%)'] = None
         
-        # 計算 YoY（Year-over-Year）- 與去年同月比較
+        # 計算今年 YoY（Year-over-Year）- 與去年同月比較
         last_year_revenue = get_revenue(current_year - 1, month)
         
         if current_revenue and last_year_revenue and last_year_revenue != 0:
             yoy = round((current_revenue - last_year_revenue) / last_year_revenue * 100, 2)
-            row['YoY(%)'] = yoy
+            row['今年YoY(%)'] = yoy
         else:
-            row['YoY(%)'] = None
+            row['今年YoY(%)'] = None
+        
+        # 計算去年 MoM（Month-over-Month）- 去年某月與去年上個月比較
+        last_year_current_revenue = get_revenue(current_year - 1, month)
+        last_year_prev_month = month - 1 if month > 1 else 12
+        last_year_prev_year = current_year - 1 if month > 1 else current_year - 2
+        last_year_prev_revenue = get_revenue(last_year_prev_year, last_year_prev_month)
+        
+        if last_year_current_revenue and last_year_prev_revenue and last_year_prev_revenue != 0:
+            last_year_mom = round((last_year_current_revenue - last_year_prev_revenue) / last_year_prev_revenue * 100, 2)
+            row['去年MoM(%)'] = last_year_mom
+        else:
+            row['去年MoM(%)'] = None
+        
+        # 計算去年 YoY（Year-over-Year）- 去年某月與前年同月比較
+        two_years_ago_revenue = get_revenue(current_year - 2, month)
+        
+        if last_year_current_revenue and two_years_ago_revenue and two_years_ago_revenue != 0:
+            last_year_yoy = round((last_year_current_revenue - two_years_ago_revenue) / two_years_ago_revenue * 100, 2)
+            row['去年YoY(%)'] = last_year_yoy
+        else:
+            row['去年YoY(%)'] = None
         
         result_rows.append(row)
     
-    # 建立 DataFrame（年份降序：新的年份在先，最後加上 MoM 和 YoY）
-    columns = ['月份'] + [f'{y}年' for y in range(current_year, start_year - 1, -1)] + ['MoM(%)', 'YoY(%)']
+    # 建立 DataFrame（年份降序：新的年份在先，最後加上今年和去年的 MoM 和 YoY）
+    columns = ['月份'] + [f'{y}年' for y in range(current_year, start_year - 1, -1)] + ['今年MoM(%)', '今年YoY(%)', '去年MoM(%)', '去年YoY(%)']
     df = pd.DataFrame(result_rows, columns=columns)
     
     return df
@@ -401,21 +422,35 @@ def analyze_stock(stock_id, output_file=None, use_cache=True):
             
             # 格式化月營收的百分比欄位
             ws_revenue = writer.sheets['月營收']
-            mom_col_idx = df_revenue.columns.get_loc('MoM(%)') + 1
-            yoy_col_idx = df_revenue.columns.get_loc('YoY(%)') + 1
+            mom_col_idx = df_revenue.columns.get_loc('今年MoM(%)') + 1
+            yoy_col_idx = df_revenue.columns.get_loc('今年YoY(%)') + 1
+            last_year_mom_col_idx = df_revenue.columns.get_loc('去年MoM(%)') + 1
+            last_year_yoy_col_idx = df_revenue.columns.get_loc('去年YoY(%)') + 1
             
             for row_idx in range(2, ws_revenue.max_row + 1):
-                # MoM 欄位
+                # 今年 MoM 欄位
                 cell_mom = ws_revenue.cell(row=row_idx, column=mom_col_idx)
                 if cell_mom.value is not None and isinstance(cell_mom.value, (int, float)):
                     cell_mom.number_format = '0.00%'
                     cell_mom.value = cell_mom.value / 100
                 
-                # YoY 欄位
+                # 今年 YoY 欄位
                 cell_yoy = ws_revenue.cell(row=row_idx, column=yoy_col_idx)
                 if cell_yoy.value is not None and isinstance(cell_yoy.value, (int, float)):
                     cell_yoy.number_format = '0.00%'
                     cell_yoy.value = cell_yoy.value / 100
+                
+                # 去年 MoM 欄位
+                cell_last_mom = ws_revenue.cell(row=row_idx, column=last_year_mom_col_idx)
+                if cell_last_mom.value is not None and isinstance(cell_last_mom.value, (int, float)):
+                    cell_last_mom.number_format = '0.00%'
+                    cell_last_mom.value = cell_last_mom.value / 100
+                
+                # 去年 YoY 欄位
+                cell_last_yoy = ws_revenue.cell(row=row_idx, column=last_year_yoy_col_idx)
+                if cell_last_yoy.value is not None and isinstance(cell_last_yoy.value, (int, float)):
+                    cell_last_yoy.number_format = '0.00%'
+                    cell_last_yoy.value = cell_last_yoy.value / 100
             
             if df_financial is not None:
                 df_financial.to_excel(writer, sheet_name='綜合損益表', index=False)
