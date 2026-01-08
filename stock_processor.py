@@ -9,6 +9,7 @@ from datetime import datetime
 
 import pandas as pd
 from FinMind.data import DataLoader
+from openpyxl.styles import Border, Side
 
 # 導入配置
 from config import BASE_DIR
@@ -16,13 +17,13 @@ from config import BASE_DIR
 # 導入模組
 from modules.logger import setup_logging, clean_old_logs
 from modules.utils import process_info_data, format_percentage_columns
-from modules.revenue import process_revenue_data, get_previous_three_months
+from modules.revenue import process_revenue_data, get_previous_three_months, create_revenue_overview
 from modules.financial import process_financial_data, process_eps_data
 
 
 
 
-def process_stock(input_file='target.xlsx', output_file=None, revenue_sheet='月營收', financial_sheet='綜合損益表', eps_sheet='EPS'):
+def process_stock(input_file='target.xlsx', output_file=None, revenue_sheet='月營收', financial_sheet='綜合損益表', eps_sheet='EPS', overview_sheet='營收總攬'):
     """處理股票數據，營收、財務和 EPS 數據分別輸出到不同的 sheet"""
     # 初始化 logging
     setup_logging()
@@ -81,23 +82,56 @@ def process_stock(input_file='target.xlsx', output_file=None, revenue_sheet='月
     logging.info(f"\n綜合損益表數據:\n{df_financial.head()}")
     logging.info(f"\nEPS數據:\n{df_eps.head()}")
     
+    # 生成營收總攬（橫向格式：月份為列，股票為欄）
+    logging.info("\n生成營收總攬...")
+    df_overview = create_revenue_overview(api, df_base)
+    logging.info(f"\n營收總攬數據:\n{df_overview.head()}")
+    
     # 決定輸出檔案
     if output_file is None:
         output_file = input_file
     
     # 使用 openpyxl 保留原檔案的其他 sheet 和格式
     try:
-        # 使用 ExcelWriter 將三個 DataFrame 分別寫入不同 sheet
+        # 使用 ExcelWriter 將四個 DataFrame 分別寫入不同 sheet
         with pd.ExcelWriter(output_file, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
+            df_overview.to_excel(writer, sheet_name=overview_sheet, index=False)
             df_revenue.to_excel(writer, sheet_name=revenue_sheet, index=False)
             df_financial.to_excel(writer, sheet_name=financial_sheet, index=False)
             df_eps.to_excel(writer, sheet_name=eps_sheet, index=False)
+            
+            # 格式化營收總攬的百分比欄位（MoM和YoY行）並添加邊框
+            ws_overview = writer.sheets[overview_sheet]
+            
+            # 定義上邊框樣式
+            top_border = Border(top=Side(style='medium', color='000000'))
+            
+            for row_idx in range(2, ws_overview.max_row + 1):
+                cell_code = ws_overview.cell(row=row_idx, column=1)
+                cell_name = ws_overview.cell(row=row_idx, column=2)
+                
+                # 檢查是否為股票開始行（代號欄位有值且名稱欄位不是 MoM/YoY）
+                if cell_code.value and cell_name.value not in ['MoM(%)', 'YoY(%)']:
+                    # 為該行所有欄位添加上邊框
+                    for col_idx in range(1, ws_overview.max_column + 1):
+                        cell = ws_overview.cell(row=row_idx, column=col_idx)
+                        cell.border = top_border
+                
+                # 檢查名稱欄位是否為 'MoM(%)' 或 'YoY(%)'
+                if cell_name.value in ['MoM(%)', 'YoY(%)']:
+                    # 格式化該行的所有百分比值（從第3欄開始，跳過代號和名稱）
+                    for col_idx in range(3, ws_overview.max_column + 1):
+                        cell = ws_overview.cell(row=row_idx, column=col_idx)
+                        if cell.value is not None and isinstance(cell.value, (int, float)):
+                            cell.number_format = '0.00%'
+                            cell.value = cell.value / 100
             
             # 格式化百分比欄位
             format_percentage_columns(writer.sheets[revenue_sheet], df_revenue)
             format_percentage_columns(writer.sheets[financial_sheet], df_financial)
         
         logging.info(f"\n已更新並儲存至: {output_file}")
+        logging.info(f"  - 營收總攬: {overview_sheet}")
         logging.info(f"  - 營收數據: {revenue_sheet}")
         logging.info(f"  - 綜合損益表: {financial_sheet}")
         logging.info(f"  - EPS數據: {eps_sheet}")

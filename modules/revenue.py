@@ -192,3 +192,135 @@ def process_revenue_data(api, df, idx, stock_id, last_month_year, last_month, pr
     df.at[idx, 'YoY(%)'] = yoy
     df.at[idx, f'{str(current_year)[-2:]}年累積營收(M)'] = ytd_revenue_million
     df.at[idx, '累積營收YoY(%)'] = ytd_yoy
+
+
+def create_revenue_overview(api, df_base):
+    """建立營收總攬（橫向格式：月份為欄，股票為列，每支股票3行）
+    
+    格式：
+    代號 | 名稱   | 12月    | 11月    | 10月    | ... | 1月
+    2330 | 台積電 | 343614  | 367473  | ...     | ... | ...
+    MoM(%)|       | -6.51%  | 2.20%   | ...     | ... | ...
+    YoY(%)|       | 14.12%  | 31.77%  | ...     | ... | ...
+    2382 | 廣達   | 192947  | 173196  | ...     | ... | ...
+    MoM(%)|       | 11.41%  | ...     | ...     | ... | ...
+    YoY(%)|       | 16.23%  | ...     | ...     | ... | ...
+    ...
+    """
+    import pandas as pd
+    from modules.utils import get_stock_name_mapping
+    
+    # 取得股票名稱對應
+    stock_dict = get_stock_name_mapping(api)
+    
+    # 取得最近12個月的月份列表（從最新月份往前推12個月）
+    current_year = datetime.now().year
+    current_month = datetime.now().month
+    
+    # 計算12個月份（由新到舊）
+    months_list = []
+    for i in range(12):
+        year = current_year
+        month = current_month - i
+        
+        if month <= 0:
+            month += 12
+            year -= 1
+        
+        months_list.append((year, month))
+    
+    # 建立欄位名稱（12月、11月、...、1月）
+    columns = ['代號', '名稱'] + [f"{month}月" for year, month in months_list]
+    
+    # 處理每支股票（每支股票3行：營收、MoM、YoY）
+    rows = []
+    total = len(df_base)
+    
+    for idx, row in df_base.iterrows():
+        stock_id = str(row["代號"])
+        stock_name = stock_dict.get(stock_id, "未知")
+        
+        logging.info(f"  [{idx+1}/{total}] 處理營收總攬: {stock_id} {stock_name}")
+        
+        try:
+            # 取得營收數據
+            revenue_data = get_stock_revenue_data(api, stock_id)
+            
+            if revenue_data is None or revenue_data.empty:
+                logging.warning(f"    警告: {stock_id} 無營收數據")
+                # 建立空白的三行
+                revenue_row = {'代號': stock_id, '名稱': stock_name}
+                mom_row = {'代號': '', '名稱': 'MoM(%)'}
+                yoy_row = {'代號': '', '名稱': 'YoY(%)'}
+                
+                for year, month in months_list:
+                    month_label = f"{month}月"
+                    revenue_row[month_label] = None
+                    mom_row[month_label] = None
+                    yoy_row[month_label] = None
+                
+                rows.extend([revenue_row, mom_row, yoy_row])
+                continue
+            
+            # 第1行：營收數據
+            revenue_row = {'代號': stock_id, '名稱': stock_name}
+            # 第2行：MoM
+            mom_row = {'代號': '', '名稱': 'MoM(%)'}
+            # 第3行：YoY
+            yoy_row = {'代號': '', '名稱': 'YoY(%)'}
+            
+            # 提取每個月份的營收並計算MoM和YoY
+            for i, (year, month) in enumerate(months_list):
+                month_label = f"{month}月"
+                revenue = extract_revenue_by_year_month(revenue_data, year, month)
+                
+                # 營收（轉換為百萬單位）
+                if revenue is not None:
+                    revenue_million = round(revenue / 1000000)
+                    revenue_row[month_label] = revenue_million
+                    
+                    # 計算 MoM（與上一個月比較）
+                    # 計算上個月的年份和月份
+                    prev_month = month - 1 if month > 1 else 12
+                    prev_year = year if month > 1 else year - 1
+                    prev_month_revenue = extract_revenue_by_year_month(revenue_data, prev_year, prev_month)
+                    
+                    if prev_month_revenue is not None and prev_month_revenue != 0:
+                        mom = round((revenue / prev_month_revenue - 1) * 100, 2)
+                        mom_row[month_label] = mom
+                    else:
+                        mom_row[month_label] = None
+                    
+                    # 計算 YoY（與去年同月比較）
+                    last_year_revenue = extract_revenue_by_year_month(revenue_data, year - 1, month)
+                    if last_year_revenue is not None and last_year_revenue != 0:
+                        yoy = round((revenue / last_year_revenue - 1) * 100, 2)
+                        yoy_row[month_label] = yoy
+                    else:
+                        yoy_row[month_label] = None
+                else:
+                    revenue_row[month_label] = None
+                    mom_row[month_label] = None
+                    yoy_row[month_label] = None
+            
+            rows.extend([revenue_row, mom_row, yoy_row])
+        
+        except Exception as e:
+            logging.error(f"    錯誤: {stock_id} 營收總攬處理失敗 - {str(e)}")
+            # 建立空白的三行
+            revenue_row = {'代號': stock_id, '名稱': stock_name}
+            mom_row = {'代號': '', '名稱': 'MoM(%)'}
+            yoy_row = {'代號': '', '名稱': 'YoY(%)'}
+            
+            for year, month in months_list:
+                month_label = f"{month}月"
+                revenue_row[month_label] = None
+                mom_row[month_label] = None
+                yoy_row[month_label] = None
+            
+            rows.extend([revenue_row, mom_row, yoy_row])
+    
+    # 建立 DataFrame
+    df = pd.DataFrame(rows, columns=columns)
+    
+    return df
