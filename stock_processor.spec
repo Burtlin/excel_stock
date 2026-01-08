@@ -2,7 +2,7 @@
 
 block_cipher = None
 
-a = Analysis(
+processor = Analysis(
     ['stock_processor.py'],
     pathex=[],
     binaries=[],
@@ -27,14 +27,14 @@ a = Analysis(
     noarchive=False,
 )
 
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+pyz = PYZ(processor.pure, processor.zipped_data, cipher=block_cipher)
 
 exe = EXE(
     pyz,
-    a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
+    processor.scripts,
+    processor.binaries,
+    processor.zipfiles,
+    processor.datas,
     [],
     name='股票數據處理器',
     debug=False,
