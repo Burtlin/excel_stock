@@ -43,17 +43,26 @@ def get_stock_financial_data(api, stock_id, start_date=None, use_cache=True):
         two_years_ago = datetime.now().replace(year=datetime.now().year - 2)
         start_date = two_years_ago.strftime('%Y-%m-%d')
     
-    logging.info(f"  ⟳ API: {stock_id} 財務")
-    data = api.taiwan_stock_financial_statement(
-        stock_id=stock_id,
-        start_date=start_date,
-    )
-    
-    # 儲存到快取
-    if data is not None and not data.empty:
-        save_cache(stock_id, 'financial', data)
-    
-    return data
+    try:
+        logging.info(f"  ⟳ API: {stock_id} 財務")
+        data = api.taiwan_stock_financial_statement(
+            stock_id=stock_id,
+            start_date=start_date,
+        )
+        
+        # 儲存到快取
+        if data is not None and not data.empty:
+            save_cache(stock_id, 'financial', data)
+        
+        return data
+        
+    except KeyError as e:
+        logging.error(f"  ✗ API錯誤: {stock_id} - API回傳格式異常 (可能是該股票無財務數據)")
+        return None
+        
+    except Exception as e:
+        logging.error(f"  ✗ API錯誤: {stock_id} 財務數據獲取失敗 - {str(e)}")
+        return None
 
 
 def extract_value_by_date(financial_data, data_type, target_date):
@@ -196,20 +205,23 @@ def get_last_two_season_gross_margin(financial_data):
     return gross_margin_last, quarter_last, gross_margin_prev, quarter_prev
 
 
-def get_ytd_eps(financial_data):
-    """計算今年累積EPS（Year-To-Date EPS）"""
-    current_year = datetime.now().year
+def get_ytd_eps(financial_data, target_year):
+    """計算指定年份的累積EPS（Year-To-Date EPS）
     
-    # 篩選今年的 EPS 數據
+    Args:
+        financial_data: 財務數據
+        target_year: 目標年份
+    """
+    # 篩選指定年份的 EPS 數據
     eps_data = financial_data[
         (financial_data['type'] == 'EPS') &
-        (financial_data['date'].str.startswith(str(current_year)))
+        (financial_data['date'].str.startswith(str(target_year)))
     ]
     
     if eps_data.empty:
         return None
     
-    # 加總今年所有季度的 EPS
+    # 加總該年所有季度的 EPS
     ytd_eps = eps_data['value'].sum()
     return round(ytd_eps, 2) if ytd_eps else None
 
@@ -284,8 +296,16 @@ def process_financial_data(api, df, idx, stock_id):
             df.at[idx, f'{str(last_year)[-2:]}年整年毛利率(%)'] = last_year_gross_margin
 
 
-def process_eps_data(api, df, idx, stock_id):
-    """處理單一股票的 EPS 數據（包含最新收盤價）"""
+def process_eps_data(api, df, idx, stock_id, last_month_year):
+    """處理單一股票的 EPS 數據（包含最新收盤價）
+    
+    Args:
+        api: FinMind API 實例
+        df: DataFrame
+        idx: 行索引
+        stock_id: 股票代號
+        last_month_year: 上個月所屬年份（用於累積EPS計算）
+    """
     from datetime import datetime, timedelta
     from modules.utils import ensure_column_exists
     
@@ -327,9 +347,9 @@ def process_eps_data(api, df, idx, stock_id):
         logging.error(f"  錯誤: {stock_id} EPS 提取失敗 - {str(e)}")
         eps_last = quarter_last = eps_prev = quarter_prev = eps_prev2 = quarter_prev2 = None
     
-    # 計算今年累積 EPS
+    # 計算上個月所屬年份的累積 EPS
     try:
-        ytd_eps = get_ytd_eps(financial_data)
+        ytd_eps = get_ytd_eps(financial_data, last_month_year)
     except Exception as e:
         logging.error(f"  錯誤: {stock_id} YTD EPS 計算失敗 - {str(e)}")
         ytd_eps = None
@@ -338,9 +358,160 @@ def process_eps_data(api, df, idx, stock_id):
     ensure_column_exists(df, f'{quarter_last}EPS')
     ensure_column_exists(df, f'{quarter_prev}EPS')
     ensure_column_exists(df, f'{quarter_prev2}EPS')
-    current_year = datetime.now().year
-    ensure_column_exists(df, f'{str(current_year)[-2:]}年累積EPS')
+    ensure_column_exists(df, f'{str(last_month_year)[-2:]}年累積EPS')
     df.at[idx, f'{quarter_last}EPS'] = eps_last
     df.at[idx, f'{quarter_prev}EPS'] = eps_prev
     df.at[idx, f'{quarter_prev2}EPS'] = eps_prev2
-    df.at[idx, f'{str(current_year)[-2:]}年累積EPS'] = ytd_eps
+    df.at[idx, f'{str(last_month_year)[-2:]}年累積EPS'] = ytd_eps
+
+
+def create_financial_overview(api, df_base):
+    """建立財務總覽（橫向格式：季度為欄，股票為列，顯示8季）
+    
+    格式：
+    代號 | 名稱   | 25Q4營收(M) | 25Q3營收(M) | ... | 24Q1營收(M)
+    2330 | 台積電 | 123456      | 118000      | ... | ...
+         | 毛利率 | 59.45%      | 58.20%      | ... | ...
+         | 營益率 | 45.30%      | 44.10%      | ... | ...
+         | 淨利率 | 39.20%      | 38.50%      | ... | ...
+         | EPS    | 12.54       | 11.80       | ... | ...
+    """
+    import pandas as pd
+    from modules.utils import get_stock_name_mapping
+    
+    # 取得股票名稱對應
+    stock_dict = get_stock_name_mapping(api)
+    
+    # 計算最近8個季度
+    current_year, last_season_month = get_last_season_month()
+    
+    quarters_list = []
+    year, month = current_year, last_season_month
+    
+    for i in range(8):
+        quarters_list.append((year, month))
+        year, month = get_previous_season_month(year, month)
+    
+    # 建立欄位名稱
+    columns = ['代號', '名稱'] + [f"{get_quarter_name(y, m)}營收(M)" for y, m in quarters_list]
+    
+    # 處理每支股票（每支股票5行：營收、毛利率、營益率、淨利率、EPS）
+    rows = []
+    total = len(df_base)
+    
+    for idx, row in df_base.iterrows():
+        stock_id = str(row["代號"])
+        stock_name = stock_dict.get(stock_id, "未知")
+        
+        logging.info(f"  [{idx+1}/{total}] 處理財務總覽: {stock_id} {stock_name}")
+        
+        try:
+            # 取得財務數據
+            financial_data = get_stock_financial_data(api, stock_id)
+            
+            if financial_data is None or financial_data.empty:
+                logging.warning(f"    警告: {stock_id} 無財務數據")
+                # 建立空白的5行
+                revenue_row = {'代號': stock_id, '名稱': stock_name}
+                gross_margin_row = {'代號': '', '名稱': '毛利率'}
+                operating_margin_row = {'代號': '', '名稱': '營益率'}
+                net_margin_row = {'代號': '', '名稱': '淨利率'}
+                eps_row = {'代號': '', '名稱': 'EPS'}
+                
+                for y, m in quarters_list:
+                    col_name = f"{get_quarter_name(y, m)}營收(M)"
+                    revenue_row[col_name] = None
+                    gross_margin_row[col_name] = None
+                    operating_margin_row[col_name] = None
+                    net_margin_row[col_name] = None
+                    eps_row[col_name] = None
+                
+                rows.extend([revenue_row, gross_margin_row, operating_margin_row, net_margin_row, eps_row])
+                continue
+            
+            # 第1行：營收
+            revenue_row = {'代號': stock_id, '名稱': stock_name}
+            # 第2行：毛利率
+            gross_margin_row = {'代號': '', '名稱': '毛利率'}
+            # 第3行：營益率
+            operating_margin_row = {'代號': '', '名稱': '營益率'}
+            # 第4行：淨利率
+            net_margin_row = {'代號': '', '名稱': '淨利率'}
+            # 第5行：EPS
+            eps_row = {'代號': '', '名稱': 'EPS'}
+            
+            # 提取每個季度的數據
+            for y, m in quarters_list:
+                quarter_date = get_season_date(y, m)
+                col_name = f"{get_quarter_name(y, m)}營收(M)"
+                
+                # 營收（轉換為百萬單位）
+                revenue = extract_value_by_date(financial_data, 'Revenue', quarter_date)
+                if revenue is not None:
+                    revenue_million = round(revenue / 1000000)
+                    revenue_row[col_name] = revenue_million
+                    
+                    # 毛利率
+                    gross_profit = extract_value_by_date(financial_data, 'GrossProfit', quarter_date)
+                    if gross_profit is not None and revenue != 0:
+                        gross_margin = round(gross_profit / revenue * 100, 2)
+                        gross_margin_row[col_name] = gross_margin
+                    else:
+                        gross_margin_row[col_name] = None
+                    
+                    # 營益率
+                    operating_income = extract_value_by_date(financial_data, 'OperatingIncome', quarter_date)
+                    if operating_income is not None and revenue != 0:
+                        operating_margin = round(operating_income / revenue * 100, 2)
+                        operating_margin_row[col_name] = operating_margin
+                    else:
+                        operating_margin_row[col_name] = None
+                    
+                    # 淨利率
+                    net_income = extract_value_by_date(financial_data, 'IncomeAfterTaxes', quarter_date)
+                    if net_income is not None and revenue != 0:
+                        net_margin = round(net_income / revenue * 100, 2)
+                        net_margin_row[col_name] = net_margin
+                    else:
+                        net_margin_row[col_name] = None
+                else:
+                    revenue_row[col_name] = None
+                    gross_margin_row[col_name] = None
+                    operating_margin_row[col_name] = None
+                    net_margin_row[col_name] = None
+                
+                # EPS
+                eps = extract_value_by_date(financial_data, 'EPS', quarter_date)
+                if eps is not None:
+                    eps_row[col_name] = round(eps, 2)
+                else:
+                    eps_row[col_name] = None
+            
+            rows.extend([revenue_row, gross_margin_row, operating_margin_row, net_margin_row, eps_row])
+        
+        except Exception as e:
+            logging.error(f"    錯誤: {stock_id} 財務總覽處理失敗 - {str(e)}")
+            # 記錄詳細錯誤堆棧
+            import traceback
+            logging.error(f"    詳細錯誤:\n\n{traceback.format_exc()}")
+            # 建立空白的5行
+            revenue_row = {'代號': stock_id, '名稱': stock_name}
+            gross_margin_row = {'代號': '', '名稱': '毛利率'}
+            operating_margin_row = {'代號': '', '名稱': '營益率'}
+            net_margin_row = {'代號': '', '名稱': '淨利率'}
+            eps_row = {'代號': '', '名稱': 'EPS'}
+            
+            for y, m in quarters_list:
+                col_name = f"{get_quarter_name(y, m)}營收(M)"
+                revenue_row[col_name] = None
+                gross_margin_row[col_name] = None
+                operating_margin_row[col_name] = None
+                net_margin_row[col_name] = None
+                eps_row[col_name] = None
+            
+            rows.extend([revenue_row, gross_margin_row, operating_margin_row, net_margin_row, eps_row])
+    
+    # 建立 DataFrame
+    df = pd.DataFrame(rows, columns=columns)
+    
+    return df

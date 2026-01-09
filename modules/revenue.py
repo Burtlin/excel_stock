@@ -82,10 +82,18 @@ def get_previous_three_months():
     return (last_month_year, last_month), (previous_month_year, previous_month), (previous_month_year2, previous_month2)
 
 
-def get_ytd_revenue_from_monthly(revenue_data):
-    """從月營收數據計算今年累積營收"""
-    current_year = datetime.now().year
-    ytd_revenue_data = revenue_data[revenue_data['revenue_year'] == current_year]
+def get_ytd_revenue_from_monthly(revenue_data, target_year, target_month):
+    """從月營收數據計算指定年份到指定月份的累積營收
+    
+    Args:
+        revenue_data: 營收數據
+        target_year: 目標年份
+        target_month: 目標月份（計算到此月為止）
+    """
+    ytd_revenue_data = revenue_data[
+        (revenue_data['revenue_year'] == target_year) &
+        (revenue_data['revenue_month'] <= target_month)
+    ]
     
     if ytd_revenue_data.empty:
         return None
@@ -93,41 +101,44 @@ def get_ytd_revenue_from_monthly(revenue_data):
     return ytd_revenue_data['revenue'].sum()
 
 
-def get_ytd_revenue_yoy(revenue_data):
-    """計算今年累積營收YoY，根據實際有資料的月份進行比較"""
-    current_year = datetime.now().year
-    last_year = current_year - 1
+def get_ytd_revenue_yoy(revenue_data, target_year, target_month):
+    """計算指定年份到指定月份的累積營收YoY
     
-    # 取得今年的營收數據
-    current_year_data = revenue_data[revenue_data['revenue_year'] == current_year]
+    Args:
+        revenue_data: 營收數據
+        target_year: 目標年份
+        target_month: 目標月份（計算到此月為止）
+    """
+    last_year = target_year - 1
     
-    if current_year_data.empty:
-        return None, None
+    # 計算目標年份截至目標月份的累積營收
+    current_ytd_data = revenue_data[
+        (revenue_data['revenue_year'] == target_year) &
+        (revenue_data['revenue_month'] <= target_month)
+    ]
     
-    # 找出今年最新有資料的月份
-    latest_month = current_year_data['revenue_month'].max()
+    if current_ytd_data.empty:
+        return None
     
-    # 計算今年截至最新月份的累積營收
-    current_ytd_data = current_year_data[current_year_data['revenue_month'] <= latest_month]
     current_ytd = current_ytd_data['revenue'].sum()
     
     # 計算去年同期（相同月份）的累積營收
     last_year_data = revenue_data[
         (revenue_data['revenue_year'] == last_year) &
-        (revenue_data['revenue_month'] <= latest_month)
+        (revenue_data['revenue_month'] <= target_month)
     ]
     
     if last_year_data.empty:
-        return None, latest_month
+        return None
     
     last_year_ytd = last_year_data['revenue'].sum()
     
     # 計算YoY
     if last_year_ytd and last_year_ytd != 0:
         yoy = round((current_ytd - last_year_ytd) / last_year_ytd * 100, 2)
-        return yoy, latest_month
+        return yoy
     
-    return None, latest_month
+    return None
 
 
 def process_revenue_data(api, df, idx, stock_id, last_month_year, last_month, previous_month_year, previous_month, previous_month_year2, previous_month2, yoy_year):
@@ -135,13 +146,12 @@ def process_revenue_data(api, df, idx, stock_id, last_month_year, last_month, pr
     from modules.utils import convert_to_million, ensure_column_exists
     
     # 動態初始化所有營收相關欄位（與 financial/eps 模組保持一致）
-    current_year = datetime.now().year
     ensure_column_exists(df, f'{last_month}月營收(M)')
     ensure_column_exists(df, f'{previous_month}月營收(M)')
     ensure_column_exists(df, f'{previous_month2}月營收(M)')
     ensure_column_exists(df, 'MoM(%)')
     ensure_column_exists(df, 'YoY(%)')
-    ensure_column_exists(df, f'{str(current_year)[-2:]}年累積營收(M)')
+    ensure_column_exists(df, f'{str(last_month_year)[-2:]}年累積營收(M)')
     ensure_column_exists(df, '累積營收YoY(%)')
     
     try:
@@ -176,26 +186,25 @@ def process_revenue_data(api, df, idx, stock_id, last_month_year, last_month, pr
     else:
         yoy = None
     
-    # 計算今年累積營收
-    ytd_revenue = get_ytd_revenue_from_monthly(revenue_data)
+    # 計算到上個月為止的累積營收
+    ytd_revenue = get_ytd_revenue_from_monthly(revenue_data, last_month_year, last_month)
     ytd_revenue_million = convert_to_million(ytd_revenue)
     
     # 計算累積營收YoY
-    ytd_yoy, ytd_month = get_ytd_revenue_yoy(revenue_data)
+    ytd_yoy = get_ytd_revenue_yoy(revenue_data, last_month_year, last_month)
     
     # 更新 DataFrame
-    current_year = datetime.now().year
     df.at[idx, f'{last_month}月營收(M)'] = revenue_current_million
     df.at[idx, f'{previous_month}月營收(M)'] = revenue_previous_million
     df.at[idx, f'{previous_month2}月營收(M)'] = revenue_previous2_million
     df.at[idx, 'MoM(%)'] = mom
     df.at[idx, 'YoY(%)'] = yoy
-    df.at[idx, f'{str(current_year)[-2:]}年累積營收(M)'] = ytd_revenue_million
+    df.at[idx, f'{str(last_month_year)[-2:]}年累積營收(M)'] = ytd_revenue_million
     df.at[idx, '累積營收YoY(%)'] = ytd_yoy
 
 
 def create_revenue_overview(api, df_base):
-    """建立營收總攬（橫向格式：月份為欄，股票為列，每支股票3行）
+    """建立營收總覽（橫向格式：月份為欄，股票為列，每支股票3行）
     
     格式：
     代號 | 名稱   | 12月    | 11月    | 10月    | ... | 1月
@@ -229,8 +238,8 @@ def create_revenue_overview(api, df_base):
         
         months_list.append((year, month))
     
-    # 建立欄位名稱（12月、11月、...、1月）
-    columns = ['代號', '名稱'] + [f"{month}月" for year, month in months_list]
+    # 建立欄位名稱（25年1月、25年11月、...、24年1月）
+    columns = ['代號', '名稱'] + [f"{str(year)[-2:]}年{month}月" for year, month in months_list]
     
     # 處理每支股票（每支股票3行：營收、MoM、YoY）
     rows = []
@@ -240,7 +249,7 @@ def create_revenue_overview(api, df_base):
         stock_id = str(row["代號"])
         stock_name = stock_dict.get(stock_id, "未知")
         
-        logging.info(f"  [{idx+1}/{total}] 處理營收總攬: {stock_id} {stock_name}")
+        logging.info(f"  [{idx+1}/{total}] 處理營收總覽: {stock_id} {stock_name}")
         
         try:
             # 取得營收數據
@@ -254,7 +263,7 @@ def create_revenue_overview(api, df_base):
                 yoy_row = {'代號': '', '名稱': 'YoY(%)'}
                 
                 for year, month in months_list:
-                    month_label = f"{month}月"
+                    month_label = f"{str(year)[-2:]}年{month}月"
                     revenue_row[month_label] = None
                     mom_row[month_label] = None
                     yoy_row[month_label] = None
@@ -271,7 +280,7 @@ def create_revenue_overview(api, df_base):
             
             # 提取每個月份的營收並計算MoM和YoY
             for i, (year, month) in enumerate(months_list):
-                month_label = f"{month}月"
+                month_label = f"{str(year)[-2:]}年{month}月"
                 revenue = extract_revenue_by_year_month(revenue_data, year, month)
                 
                 # 營收（轉換為百萬單位）
@@ -306,14 +315,17 @@ def create_revenue_overview(api, df_base):
             rows.extend([revenue_row, mom_row, yoy_row])
         
         except Exception as e:
-            logging.error(f"    錯誤: {stock_id} 營收總攬處理失敗 - {str(e)}")
+            logging.error(f"    錯誤: {stock_id} 營收總覽處理失敗 - {str(e)}")
+            # 記錄詳細錯誤堆棧
+            import traceback
+            logging.error(f"    詳細錯誤:\n{traceback.format_exc()}")
             # 建立空白的三行
             revenue_row = {'代號': stock_id, '名稱': stock_name}
             mom_row = {'代號': '', '名稱': 'MoM(%)'}
             yoy_row = {'代號': '', '名稱': 'YoY(%)'}
             
             for year, month in months_list:
-                month_label = f"{month}月"
+                month_label = f"{str(year)[-2:]}年{month}月"
                 revenue_row[month_label] = None
                 mom_row[month_label] = None
                 yoy_row[month_label] = None
