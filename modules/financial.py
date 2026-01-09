@@ -309,11 +309,19 @@ def process_eps_data(api, df, idx, stock_id, last_month_year):
     from datetime import datetime, timedelta
     from modules.utils import ensure_column_exists
     
-    # 獲取最新收盤價
+    # 初始化收盤價欄位（確保欄位一定存在）
+    ensure_column_exists(df, '今日收盤價')
+    ensure_column_exists(df, '昨日收盤價')
+    
+    # 獲取收盤價數據
+    today_close = None
+    yesterday_close = None
+    
     try:
         # 計算查詢起始日期（最近 30 天）
         end_date = datetime.now()
-        start_date = end_date - timedelta(days=10)
+        start_date = end_date - timedelta(days=30)
+        today_str = end_date.strftime('%Y-%m-%d')
         
         daily_data = api.taiwan_stock_daily(
             stock_id=stock_id,
@@ -321,18 +329,30 @@ def process_eps_data(api, df, idx, stock_id, last_month_year):
         )
         
         if daily_data is not None and not daily_data.empty:
-            # 取得最新一筆資料
-            latest_data = daily_data.sort_values(by="date", ascending=False).head(1)
-            latest_date = latest_data.iloc[0]["date"]
-            latest_close = latest_data.iloc[0]["close"]
+            # 排序取得最新資料
+            sorted_data = daily_data.sort_values(by="date", ascending=False)
             
-            # 初始化並更新收盤價欄位（欄位名稱為日期）
-            ensure_column_exists(df, latest_date)
-            df.at[idx, latest_date] = latest_close
+            # 嘗試取得今日收盤價
+            today_data = sorted_data[sorted_data['date'] == today_str]
+            if not today_data.empty:
+                today_close = today_data.iloc[0]["close"]
+                logging.info(f"  ✓ 今日收盤價: {stock_id} = {today_close}")
+            else:
+                logging.info(f"  ℹ 今日收盤價: {stock_id} 尚未更新")
+            
+            # 取得最新一筆資料作為昨日收盤價
+            latest_data = sorted_data.head(1)
+            yesterday_close = latest_data.iloc[0]["close"]
+            latest_date = latest_data.iloc[0]["date"]
+            logging.info(f"  ✓ 昨日收盤價: {stock_id} = {yesterday_close} ({latest_date})")
         else:
             logging.warning(f"  警告: {stock_id} 無法取得收盤價")
     except Exception as e:
         logging.error(f"  錯誤: {stock_id} 收盤價取得失敗 - {str(e)}")
+    
+    # 更新收盤價（即使為 None 也會顯示欄位）
+    df.at[idx, '今日收盤價'] = today_close
+    df.at[idx, '昨日收盤價'] = yesterday_close
     
     # 獲取財務數據
     financial_data = get_stock_financial_data(api, stock_id)
@@ -354,14 +374,19 @@ def process_eps_data(api, df, idx, stock_id, last_month_year):
         logging.error(f"  錯誤: {stock_id} YTD EPS 計算失敗 - {str(e)}")
         ytd_eps = None
     
+    # 計算 EPS*4（最新一季EPS年化）
+    eps_times_4 = round(eps_last * 4, 2) if eps_last is not None else None
+    
     # 初始化並更新 EPS 欄位
     ensure_column_exists(df, f'{quarter_last}EPS')
     ensure_column_exists(df, f'{quarter_prev}EPS')
     ensure_column_exists(df, f'{quarter_prev2}EPS')
+    ensure_column_exists(df, 'EPS*4')
     ensure_column_exists(df, f'{str(last_month_year)[-2:]}年累積EPS')
     df.at[idx, f'{quarter_last}EPS'] = eps_last
     df.at[idx, f'{quarter_prev}EPS'] = eps_prev
     df.at[idx, f'{quarter_prev2}EPS'] = eps_prev2
+    df.at[idx, 'EPS*4'] = eps_times_4
     df.at[idx, f'{str(last_month_year)[-2:]}年累積EPS'] = ytd_eps
 
 
